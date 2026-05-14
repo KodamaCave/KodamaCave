@@ -1,0 +1,923 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>回声洞</title>
+<style>
+:root{
+  --opH:48px;
+  --cardW:160px;  /* JS会根据视口动态覆盖此值 */
+  --gap:6px;      /* JS会根据视口动态覆盖此值 */
+  --accent:#2c7be5;
+  --floatW:calc(90vw - 20px); /* 占视口90%宽度，预留20px边距 */
+  --floatMaxW:520px; /* 最大宽度不超过原520px */
+  --floatMinW:300px; /* 最小宽度保证可用性 */
+  --floatH:70vh;
+  --playerBg:rgba(0,0,0,.85);
+}
+*{box-sizing:border-box;font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica Neue,Arial;}
+body{margin:0;background:#f5f5f5;color:#222;}
+#opBar{display:flex;align-items:center;height:var(--opH);background:#fff;box-shadow:0 2px 4px rgba(0,0,0,.08);position:sticky;top:0;z-index:10;}
+#opBar>button{height:32px;margin:0 4px;padding:0 12px;border:1px solid #ddd;background:#fff;border-radius:4px;cursor:pointer;}
+#opBar>button.active{background:var(--accent);color:#fff;border-color:var(--accent);}
+#search{flex:1;margin:0 8px;height:32px;border:1px solid #ccc;border-radius:4px;padding:0 8px;}
+#hintBtn{width:32px;margin-right:8px;border:1px solid #ccc;background:#fff;border-radius:4px;cursor:pointer;}
+#tipsBar{display:flex;gap:4px;align-items:center;margin-left:8px;flex-wrap:wrap;}
+#tipsBar button{background:#f2f2f2;border:1px solid #ccc;border-radius:4px;padding:2px 6px;font-size:12px;cursor:pointer;}
+#tipsBar button:hover{background:#e3e3e3;}
+@media(min-width:600px){
+  #opBar{width:280px;height:80px;flex-direction:column;border-radius:0 0 12px 0;padding:8px;}
+  #search{width:calc(100% - 16px);margin:4px 8px;}
+}
+#echoBar{position:fixed;top:var(--opH);left:50%;transform:translateX(-50%);background:var(--accent);color:#fff;padding:6px 14px;border-radius:20px;font-size:13px;z-index:25;display:none;box-shadow:0 2px 8px rgba(0,0,0,.2);}
+#fileDrawer{position:fixed;left:0;width:260px;height:calc(100% - var(--opH));background:#fff;box-shadow:2px 0 8px rgba(0,0,0,.1);transform:translateX(-100%);transition:transform .3s;z-index:9;overflow:hidden;}
+#fileDrawer.show{transform:translateX(0);}
+#fileList{height:calc(100% - 100px);overflow:auto;}
+.fileItem{display:flex;justify-content:space-between;padding:6px 10px;border-bottom:1px solid #eee;}
+/* 1. 通用遮罩样式（保留） */
+.modal-mask{position:fixed;inset:0;background:rgba(0,0,0,.45);display:none;z-index:20;}
+.modal-mask.show{display:block;}
+/* 2. 新增抽屉专属遮罩样式 - 核心修复：z-index低于抽屉 */
+#drawerMask{
+  position:fixed;
+  inset:0;
+  background:rgba(0,0,0,.45);
+  display:none;
+  z-index:8; /* 低于抽屉的z-index:9，确保不遮挡抽屉 */
+}
+#drawerMask.show{
+  display:block;
+}
+/* 悬浮窗样式 */
+.float-window{
+  position:fixed;
+  top:50%;
+  left:50%;
+  transform:translate(-50%,-50%);
+  width:var(--floatW); /* 自适应宽度 */
+  max-width:var(--floatMaxW); /* 最大宽度限制 */
+  min-width:var(--floatMinW); /* 最小宽度保证 */
+  height:var(--floatH);
+  background:#fff;
+  border-radius:8px;
+  box-shadow:0 8px 30px rgba(0,0,0,.3);
+  display:flex;
+  flex-direction:column;
+  overflow:hidden;
+}
+.float-header{display:flex;border-bottom:1px solid #ddd;position:relative;}
+.float-tab{flex:1;text-align:center;padding:10px 0;cursor:pointer;background:#f7f7f7;border:none;font-size:14px;}
+.float-tab.active{background:#fff;font-weight:600;}
+.tab-dropdown{position:absolute;top:40px;left:0;right:0;background:#fff;border:1px solid #ddd;border-top:none;border-radius:0 0 6px 6px;display:none;z-index:21;}
+.tab-dropdown.show{display:block;}
+.tab-dropdown-item{padding:8px 12px;cursor:pointer;font-size:13px;}
+.tab-dropdown-item:hover{background:#f2f2f2;}
+.float-body{flex:1;padding:12px;overflow-y:auto;}
+.player-mask{position:fixed;inset:0;background:var(--playerBg);display:none;z-index:30;align-items:center;justify-content:center;}
+.player-mask.show{display:flex;}
+.player-box{background:#000;border-radius:12px;overflow:hidden;max-width:90vw;max-height:90vh;}
+.player-box video{max-width:100%;max-height:calc(90vh - 60px);outline:none;}
+.player-box img{max-width:100%;max-height:calc(90vh - 60px);}
+.player-controls{display:flex;gap:10px;padding:10px;background:#111;justify-content:center;}
+.player-controls button{background:#333;color:#fff;border:none;padding:8px 14px;border-radius:4px;cursor:pointer;}
+.player-info{color:#ccc;font-size:12px;padding:6px 10px;background:#000;text-align:center;}
+#cardGrid{display:flex;flex-wrap:wrap;gap:var(--gap);padding:var(--gap);}
+.card{
+  width:var(--cardW);
+  min-width:120px;       /* 最小宽度保证可用性 */
+  max-width:240px;       /* 最大宽度防止过大 */
+  background:#fff;
+  border-radius:6px;
+  box-shadow:0 1px 3px rgba(0,0,0,.1);
+  cursor:pointer;
+  position:relative;
+  flex:0 0 auto;         /* 不伸缩，保持固定宽度 */
+}
+.card img{width:100%;height:var(--cardImgH,100px);object-fit:cover;border-radius:6px 6px 0 0;}
+.card .title{font-size:13px;padding:4px 6px;height:36px;overflow:hidden;}
+.card .tags{font-size:11px;color:#555;padding:0 6px 6px;}
+.card-check{position:absolute;bottom:4px;right:4px;width:18px;height:18px;accent-color:var(--accent);}
+.weight-pop{position:fixed;background:#fff;border:1px solid #ddd;border-radius:6px;padding:10px;z-index:35;display:none;box-shadow:0 4px 20px rgba(0,0,0,.25);}
+.weight-pop.show{display:block;}
+.weight-pop input[type=range]{width:160px;}
+.detail-thumb{width:100%;max-height:200px;object-fit:cover;border-radius:6px;}
+.detail-tags{margin-top:8px;}
+.detail-start{margin-top:12px;font-size:13px;}
+.sectionTitle{font-weight:600;margin:8px 0 4px 0;}
+.btnRow{margin:6px 0;}
+</style>
+<base target="_blank">
+</head>
+<body>
+<div id="opBar">
+  <button id="fileBtn">文件</button>
+  <button id="tagBtn">标签</button>
+  <input id="search" placeholder="搜索标签 / 文件名"/>
+  <span id="tipsBar"></span>
+  <button id="hintBtn" title="提示">?</button>
+</div>
+<div id="echoBar"></div>
+
+<!-- 3. 抽屉遮罩层（独立样式） -->
+<div id="drawerMask"></div>
+<div id="fileDrawer">
+  <div style="padding:10px;">
+    <input type="file" id="fileInput" multiple style="display:none">
+    <button id="loadFile">载入文件</button>
+    <button id="unloadFile">载出选中</button>
+  </div>
+  <div id="fileList"></div>
+</div>
+
+<!-- 标签悬浮窗 -->
+<div class="modal-mask" id="tagMask">
+  <div class="float-window" id="tagFloat">
+    <div class="float-header">
+      <button class="float-tab active" id="tagTab">标签</button>
+      <button class="float-tab" id="filterTab">筛选排序模式</button>
+      <div class="tab-dropdown" id="tagDropdown">
+        <div class="tab-dropdown-item" data-scroll="allTags">所有标签</div>
+        <div class="tab-dropdown-item" data-scroll="schemeArea">常用标签方案</div>
+        <div class="tab-dropdown-item" data-scroll="extTags">文件类型</div>
+      </div>
+    </div>
+    <div class="float-body">
+      <div id="tagContent">
+        <div class="sectionTitle">所有标签</div>
+        <div id="allTags"></div>
+        <div class="btnRow">
+          <button onclick="batchAddTag()">批量添加</button>
+          <button onclick="batchDelTag()">批量删除</button>
+        </div>
+
+        <div class="sectionTitle">常用标签方案</div>
+        <div id="schemeArea"></div>
+        <div class="btnRow">
+          <button onclick="saveScheme()">保存</button>
+          <button onclick="loadScheme()">加载</button>
+          <button onclick="deleteScheme()">删除</button>
+        </div>
+
+        <div class="sectionTitle">文件类型</div>
+        <div id="extTags"></div>
+      </div>
+      <div id="filterContent" style="display:none">
+        <label><input type="checkbox" id="modeFilter" checked>筛选模式</label><br>
+        <label><input type="checkbox" id="modeSort">排序模式</label><br>
+        <label><input type="checkbox" id="sec1" checked>一区</label><br>
+        <label><input type="checkbox" id="sec2" checked>二区</label><br>
+        <label><input type="checkbox" id="sec3">三区</label>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 提示悬浮窗 -->
+<div class="modal-mask" id="hintMask">
+  <div class="float-window" id="hintFloat">
+    <div class="float-header"><div class="float-tab active">提示</div></div>
+    <div class="float-body">
+      <p>搜索框支持「标签名」「文件名」「扩展名」混合搜索，用空格分隔多个关键词即可。</p>
+      <p>长按或右键卡片可查看详情/调整起播点。</p>
+      <p>滚动到底部会自动加载剩余缩略图。</p>
+    </div>
+  </div>
+</div>
+
+<!-- 文件详情悬浮窗 -->
+<div class="modal-mask" id="detailMask">
+  <div class="float-window" id="detailFloat" style="height:auto;max-height:80vh;">
+    <div class="float-header"><div class="float-tab active">文件详情</div></div>
+    <div class="float-body">
+      <img id="detailThumb" class="detail-thumb">
+      <div id="detailName" style="font-weight:600;margin-top:8px;"></div>
+      <div class="detail-tags">标签：<span id="detailTags"></span></div>
+      <div class="detail-start">
+        起播点：
+        <input type="time" id="startTime" step="1" value="00:00:00">
+        <label><input type="checkbox" id="startOn"> 启用</label>
+        <button onclick="saveStartPoint()">保存</button>
+      </div>
+      <div style="margin-top:12px;">
+        <input id="detailTagInput" placeholder="新增标签（空格分隔）">
+        <button onclick="detailAddTag()">添加</button>
+        <button onclick="detailDelTag()">删除选中</button>
+      </div>
+      <div id="detailTagList" style="margin-top:8px;"></div>
+    </div>
+  </div>
+</div>
+
+<!-- 播放器/图片弹层 -->
+<div class="player-mask" id="playerMask">
+  <div class="player-box">
+    <div class="player-info" id="playerInfo"></div>
+    <div id="playerMedia"></div>
+    <div class="player-controls">
+      <button onclick="playerPlayPause()">播放/暂停</button>
+      <button onclick="playerMute()">静音/取消</button>
+      <button onclick="playerSpeed()">倍速</button>
+      <button onclick="playerClose()">关闭</button>
+    </div>
+  </div>
+</div>
+
+<div id="cardGrid"></div>
+
+<!-- 权重编辑器 -->
+<div id="weightPop" class="weight-pop">
+  <div>权重：<span id="weightVal">5</span></div>
+  <input type="range" id="weightRange" min="-10" max="10" step="0.1" value="5">
+  <button onclick="weightPop.classList.remove('show')">确定</button>
+</div>
+
+<script>
+/* ========================= 状态 ========================= */
+const state={
+  files:new Map(),          // key -> {name,ext,tags,thumb,elem,objURL,startPoint:{time,on}}
+  selectedFiles:new Set(),
+  filterMode:true,
+  sortMode:false,
+  showSec:[true,true,false],
+  inputTags:new Set(),
+  tagWeights:new Map(),
+  jsonFiles:[],             // 已载入的 JSON 文件列表（File 对象）
+  jsonData:{fileTags:{},schemes:{},startPoints:{}}, // 内存并集
+  playerSpeedIndex:2,
+  playerSpeeds:[0.5,0.75,1,1.25,1.5,2],
+  currentDetailPath:null,
+  weightPopTarget:null
+};
+/* ========================= DOM 引用 ========================= */
+const opBar   = document.getElementById('opBar');
+const drawer  = document.getElementById('fileDrawer');
+const tagMask = document.getElementById('tagMask');
+const hintMask= document.getElementById('hintMask');
+const detailMask=document.getElementById('detailMask');
+const playerMask=document.getElementById('playerMask');
+const fileInput=document.getElementById('fileInput');
+const tipsBar=document.getElementById('tipsBar');
+// 抽屉遮罩引用
+const drawerMask = document.getElementById('drawerMask');
+
+/* ========================= 按钮事件绑定 ========================= */
+document.getElementById('fileBtn').onclick = () => {
+  const isShow = drawer.classList.contains('show');
+  if (isShow) {
+    drawer.classList.remove('show');
+    drawerMask.classList.remove('show');
+  } else {
+    drawer.classList.add('show');
+    drawerMask.classList.add('show');
+    // 绑定遮罩点击事件
+    drawerMask.onclick = e => {
+      if(e.target === drawerMask) {
+        drawer.classList.remove('show');
+        drawerMask.classList.remove('show');
+      }
+    };
+  }
+};
+document.getElementById('tagBtn') .onclick = () => showFloat('tagMask','tagFloat');
+document.getElementById('hintBtn').onclick = () => showFloat('hintMask','hintFloat');
+
+/* ========================= 回声洞提示 ========================= */
+function echo(msg,ms=2500){
+  const bar=document.getElementById('echoBar');
+  bar.textContent=msg; bar.style.display='block';
+  setTimeout(()=>bar.style.display='none',ms);
+}
+
+/* ==================== 1. 标签提示（完全移植 Python 逻辑） ==================== */
+function updateTips(){
+  tipsBar.innerHTML='';
+  const text=document.getElementById('search').value.trim().toLowerCase();
+  if(!text) return;
+  /* 模糊匹配前 8 个 */
+  const hits=[...allTagsPool].filter(t=>t.includes(text)&&t!==text).slice(0,8);
+  hits.forEach(tag=>{
+    const b=document.createElement('button');
+    b.textContent=tag;
+    b.onclick=()=>appendTagToSearch(tag);
+    tipsBar.appendChild(b);
+  });
+}
+function appendTagToSearch(tag){
+  const s=document.getElementById('search');
+  s.value=(s.value.trim()+' '+tag).trim();
+  onSearchChanged();
+}
+/* 监听搜索框 */
+document.getElementById('search').addEventListener('input',()=>{
+  updateTips();
+  onSearchChanged();
+});
+
+/* ========================= 顶部栏 + 抽屉 ========================= */
+function syncDrawerTop(){const h=opBar.getBoundingClientRect().height;drawer.style.top=h+'px';drawer.style.height=`calc(100vh - ${h}px)`;}
+syncDrawerTop(); window.addEventListener('resize',syncDrawerTop);
+
+/* ========================= JSON 读写工具 ========================= */
+function mergeJSON(data){
+  for(const [fname,tags] of Object.entries(data.fileTags||{})){
+    if(!state.jsonData.fileTags[fname]) state.jsonData.fileTags[fname]=[];
+    state.jsonData.fileTags[fname]=[...new Set([...state.jsonData.fileTags[fname],...tags])];
+  }
+  const schemes= data.schemes||{};
+  for(const [k,v] of Object.entries(schemes)) if(!state.jsonData.schemes[k]) state.jsonData.schemes[k]=v;
+  const sp=data.startPoints||{};
+  for(const [f,p] of Object.entries(sp)) if(!state.jsonData.startPoints[f]) state.jsonData.startPoints[f]=p;
+}
+function flushAllJSON(){
+  if(state.jsonFiles.length===0) state.jsonFiles.push({name:'tags.json'});
+  const blob=new Blob([JSON.stringify(state.jsonData,null,2)],{type:'application/json'});
+  for(const f of state.jsonFiles){
+    const a=document.createElement('a');
+    a.href=URL.createObjectURL(blob);
+    a.download=f.name||'tags.json';
+    a.click();
+  }
+}
+
+/* ========================= 载入文件 ========================= */
+document.getElementById('loadFile').onclick=()=>fileInput.click();
+fileInput.onchange=async()=>{
+  const files=Array.from(fileInput.files);
+  /* ===== 第一阶段：先处理所有 JSON 文件，合并数据 ===== */
+  const mediaFiles=[];
+  for(const file of files){
+    const name=file.name, ext=name.slice(name.lastIndexOf('.')+1).toLowerCase();
+    if(ext==='json'){
+      const txt=await file.text();
+      try{ mergeJSON(JSON.parse(txt)); echo('已合并：'+name); }
+      catch(e){ echo('JSON 解析失败：'+name); }
+      state.jsonFiles.push(file);
+    }else{
+      mediaFiles.push(file);
+    }
+  }
+  /* ===== 第二阶段：再用合并后的 jsonData 创建文件对象 ===== */
+  for(const file of mediaFiles){
+    const name=file.name, ext=name.slice(name.lastIndexOf('.')+1).toLowerCase();
+    const key='/user/'+name;
+    if(state.files.has(key)) continue;
+    const objURL=URL.createObjectURL(file);
+    const jsonTags=state.jsonData.fileTags[name]||[];
+    const jsonStart=state.jsonData.startPoints[name]||{time:0,on:false};
+    state.files.set(key,{name,ext,tags:[...jsonTags],thumb:'',elem:null,objURL,startPoint:jsonStart});
+  }
+  renderFileList(); buildTagPanel(); renderGrid();
+};
+
+/* ========================= 载出选中 ========================= */
+document.getElementById('unloadFile').onclick=()=>{
+  state.selectedFiles.forEach(p=>state.files.delete(p));
+  state.selectedFiles.clear();
+  renderFileList(); renderGrid();
+  flushAllJSON();
+};
+window.addEventListener('beforeunload',()=>{if(state.jsonFiles.length)flushAllJSON();});
+
+/* ========================= 文件列表 ========================= */
+function renderFileList(){
+  const box=document.getElementById('fileList');
+  box.innerHTML='';
+  for(const [path,{name}] of state.files){
+    const item=document.createElement('div'); item.className='fileItem';
+    item.innerHTML=`<span>${name}</span><button>删</button>`;
+    item.querySelector('button').onclick=(e)=>{e.stopPropagation();state.files.delete(path);state.selectedFiles.delete(path);renderFileList();renderGrid();};
+    item.onclick=()=>{if(state.selectedFiles.has(path))state.selectedFiles.delete(path);else state.selectedFiles.add(path);item.style.background=state.selectedFiles.has(path)?'#e3f2fd':'';};
+    box.appendChild(item);
+  }
+}
+
+/* ========================= 悬浮窗通用 ========================= */
+function showFloat(maskId,floatId){
+  const mask=document.getElementById(maskId),float=document.getElementById(floatId);
+  mask.classList.add('show');
+  mask.onclick=e=>{if(e.target===mask){mask.classList.remove('show');}};
+}
+function hideFloat(maskId){document.getElementById(maskId).classList.remove('show');}
+
+/* 标签页切换 */
+document.getElementById('tagTab').onclick=function(){
+  const alreadyActive=this.classList.contains('active');
+  document.getElementById('tagContent').style.display='block';
+  document.getElementById('filterContent').style.display='none';
+  this.classList.add('active'); document.getElementById('filterTab').classList.remove('active');
+  /* 只有当前已在标签页时，点击才打开下拉菜单 */
+  if(alreadyActive) document.getElementById('tagDropdown').classList.toggle('show');
+  else document.getElementById('tagDropdown').classList.remove('show');
+};
+document.getElementById('filterTab').onclick=function(){
+  document.getElementById('tagContent').style.display='none';
+  document.getElementById('filterContent').style.display='block';
+  this.classList.add('active'); document.getElementById('tagTab').classList.remove('active');
+  document.getElementById('tagDropdown').classList.remove('show');
+};
+document.querySelectorAll('#tagDropdown .tab-dropdown-item').forEach(el=>{
+  el.onclick=()=>{
+    const targetId=el.dataset.scroll;
+    const target=document.getElementById(targetId);
+    if(target) target.scrollIntoView({behavior:'smooth',block:'start'});
+    document.getElementById('tagDropdown').classList.remove('show');
+  };
+});
+
+/* ========================= 权重编辑器 ========================= */
+function showWeightPop(tag,x,y){
+  const pop=document.getElementById('weightPop');
+  state.weightPopTarget=tag;
+  const w=state.tagWeights.get(tag)||5;
+  document.getElementById('weightRange').value=w;
+  document.getElementById('weightVal').textContent=w;
+  pop.style.left=Math.min(x,window.innerWidth-200)+'px';
+  pop.style.top=Math.min(y,window.innerHeight-100)+'px';
+  pop.classList.add('show');
+  setTimeout(()=>document.addEventListener('click',hideWeightPopOnce,{once:true}));
+}
+function hideWeightPopOnce(e){
+  const pop=document.getElementById('weightPop');
+  if(!pop.contains(e.target)) pop.classList.remove('show');
+}
+document.getElementById('weightRange').oninput=()=>{
+  const w=document.getElementById('weightRange').value;
+  document.getElementById('weightVal').textContent=w;
+  if(!state.weightPopTarget) return;
+  state.tagWeights.set(state.weightPopTarget,Number(w));
+  buildTagPanel(); onSearchChanged();
+  echo('权重已更新');
+};
+
+/* ========================= 缩略图懒生成 ========================= */
+async function createVideoThumb(objURL){
+  return new Promise((res)=>{
+    const video=document.createElement('video');
+    video.src=objURL; video.currentTime=1;
+    video.onseeked=()=>{
+      const canvas=document.createElement('canvas');
+      canvas.width=160; canvas.height=100;
+      canvas.getContext('2d').drawImage(video,0,0,160,100);
+      res(canvas.toDataURL('image/jpeg',0.8));
+      video.remove();
+    };
+    video.onerror=()=>res(defaultThumb());
+  });
+}
+function defaultThumb(){
+  return 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTYwIiBoZWlnaHQ9IjEwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSIjZGRkIi8+PHRleHQgeD0iNTAlIiB5PSI1MCUiIGZvbnQtc2l6ZT0iMTgiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGR5PSIuM2VtIiBmaWxsPSIjOTk5Ij4rPC90ZXh0Pjwvc3ZnPg==';
+}
+
+/* ========================= 视口懒加载 ========================= */
+const obs=new IntersectionObserver((entries,observer)=>{
+  entries.forEach(async ent=>{
+    if(ent.isIntersecting){
+      const card=ent.target, path=card.dataset.path, meta=state.files.get(path);
+      if(meta && !meta.thumb && meta.objURL){
+        meta.thumb=await createVideoThumb(meta.objURL);
+        const img=card.querySelector('img');
+        if(img) img.src=meta.thumb;
+      }
+      observer.unobserve(card);
+    }
+  });
+},{rootMargin:'200px'});
+
+/* ========================= 网格渲染 ========================= */
+async function renderGrid(){
+  const grid=document.getElementById('cardGrid');
+  grid.innerHTML='';
+  /* ========== 1. 先收集“当前想用的标签” ========== */
+  const listTags=[...document.querySelectorAll('#allTags input:checked')].map(i=>i.value);
+  const extTags=[...document.querySelectorAll('#extTags input:checked')].map(i=>i.value);
+  const inputWords=document.getElementById('search').value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const inputTags=new Set([...listTags,...extTags,...inputWords]);
+
+  /* ========== 2. 权重排序开关 ========== */
+  const weights=state.sortMode?
+        Object.fromEntries([...state.tagWeights.entries()].filter(([,w])=>w!==5))
+        :{};
+
+  /* ========== 3. 三区拆分逻辑（完全对齐 Python） ========== */
+  const full=[],part=[],none=[];
+  for(const [path,meta] of state.files){
+    const ft=new Set(meta.tags);
+    const hit=inputTags.size===0||[...inputTags].some(t=>ft.has(t)||meta.ext===t||meta.name.toLowerCase().includes(t));
+    if(!hit){ none.push(path); continue; }
+    const allHit=[...inputTags].every(t=>ft.has(t)||meta.ext===t||meta.name.toLowerCase().includes(t));
+    (allHit?full:part).push(path);
+  }
+  /* 排序模式：按权重得分降序 */
+  if(state.sortMode){
+    const score=p=>{
+      const meta=state.files.get(p);
+      return [...inputTags].reduce((s,t)=>(s+(meta.tags.includes(t)?(weights[t]||5):0)),0);
+    };
+    [full,part,none].forEach(arr=>arr.sort((a,b)=>score(b)-score(a)));
+  }
+  const regions=[];
+  if(state.showSec[0]) regions.push(['完全匹配',full]);
+  if(state.showSec[1]) regions.push(['部分匹配',part]);
+  if(state.showSec[2]) regions.push(['完全不匹配',none]);
+
+  /* ========== 4. 真正渲染 ========== */
+  for(const [title,paths] of regions){
+    if(!paths.length) continue;
+    const tit=document.createElement('div');tit.className='sectionTitle';tit.textContent=`【${title}】(${paths.length} 个)`;
+    grid.appendChild(tit);
+    for(const path of paths){
+      const meta=state.files.get(path);
+      const card=document.createElement('div');card.className='card';card.dataset.path=path;
+      card.innerHTML=`<img src="${meta.thumb||defaultThumb()}"/><div class="title">${meta.name}</div><div class="tags">${meta.tags.join(' ')}</div>
+      <input type="checkbox" class="card-check" ${state.selectedFiles.has(path)?'checked':''}>`;
+      card.onclick=(e)=>{if(e.target.classList.contains('card-check'))return; openMedia(path);};
+      card.oncontextmenu=e=>{e.preventDefault(); openDetail(path);};
+      card.addEventListener('touchstart',e=>{card._long=setTimeout(()=>{e.preventDefault(); openDetail(path);},600);});
+      card.addEventListener('touchend',()=>clearTimeout(card._long));
+      card.querySelector('.card-check').onchange=(e)=>{
+        const p=card.dataset.path;
+        e.target.checked?state.selectedFiles.add(p):state.selectedFiles.delete(p);
+      };
+      grid.appendChild(card);
+      obs.observe(card);
+    }
+  }
+}
+
+/* ========================= 媒体弹窗 ========================= */
+let playerObjURL='';
+function openMedia(path){
+  const meta=state.files.get(path);
+  if(!meta) return;
+  const ext=meta.ext.toLowerCase();
+  playerObjURL=meta.objURL;
+  document.getElementById('playerInfo').textContent=`${meta.name}`;
+  const box=document.getElementById('playerMedia');
+  box.innerHTML='';
+  if(['mp4','webm','ogv','mov','avi','mkv','flv','mp3','wav','m4a','aac','ogg'].includes(ext)){
+    const video=document.createElement('video');
+    video.src=meta.objURL; video.controls=true; video.preload='metadata';
+    box.appendChild(video);
+    state.playerSpeedIndex=2; video.playbackRate=state.playerSpeeds[state.playerSpeedIndex];
+    playerMask.classList.add('show');
+    video.focus();
+    const sp=meta.startPoint||{time:0,on:false};
+    if(sp.on && sp.time>0){
+      video.currentTime=sp.time;
+      document.getElementById('playerInfo').textContent+=` · 起播 ${secondsToTime(sp.time)}`;
+    }
+    video.addEventListener('loadedmetadata',()=>{
+      document.getElementById('playerInfo').textContent+=` · 时长 ${formatTime(video.duration)}`;
+    });
+  }else if(['jpg','jpeg','png','gif','webp','bmp','svg'].includes(ext)){
+    const img=document.createElement('img');
+    img.src=meta.objURL; box.appendChild(img);
+    playerMask.classList.add('show');
+  }else{
+    window.open(meta.objURL,'_blank');
+  }
+}
+function playerPlayPause(){
+  const v=document.querySelector('#playerMedia video');
+  if(v){ v.paused?v.play():v.pause(); }
+}
+function playerMute(){
+  const v=document.querySelector('#playerMedia video');
+  if(v){ v.muted=!v.muted; }
+}
+function playerSpeed(){
+  const v=document.querySelector('#playerMedia video');
+  if(v){
+    state.playerSpeedIndex=(state.playerSpeedIndex+1)%state.playerSpeeds.length;
+    v.playbackRate=state.playerSpeeds[state.playerSpeedIndex];
+    document.getElementById('playerInfo').textContent=`倍速：${state.playerSpeeds[state.playerSpeedIndex]}x`;
+  }
+}
+function playerClose(){
+  const v=document.querySelector('#playerMedia video');
+  if(v){ v.pause(); v.src=''; }
+  playerMask.classList.remove('show');
+}
+playerMask.onclick=e=>{if(e.target===playerMask)playerClose();};
+
+/* ========================= 文件详情 ========================= */
+function openDetail(path){
+  const meta=state.files.get(path);
+  if(!meta) return;
+  state.currentDetailPath=path;
+  document.getElementById('detailThumb').src=meta.thumb||defaultThumb();
+  document.getElementById('detailName').textContent=meta.name;
+  renderDetailTags();
+  const sp=meta.startPoint||{time:0,on:false};
+  document.getElementById('startTime').value=secondsToTime(sp.time);
+  document.getElementById('startOn').checked=sp.on;
+  showFloat('detailMask','detailFloat');
+}
+function renderDetailTags(){
+  const meta=state.files.get(state.currentDetailPath);
+  if(!meta) return;
+  const box=document.getElementById('detailTagList');
+  box.innerHTML=meta.tags.map(t=>`<label><input type="checkbox" value="${t}"> ${t}</label>`).join('');
+}
+function detailAddTag(){
+  const name=document.getElementById('detailTagInput').value.trim();
+  if(!name) return;
+  const meta=state.files.get(state.currentDetailPath);
+  if(!meta) return;
+  const tags=name.split(' ').filter(Boolean);
+  tags.forEach(t=>{if(!meta.tags.includes(t)) meta.tags.push(t);});
+  state.jsonData.fileTags[meta.name]=[...meta.tags];
+  flushAllJSON(); renderDetailTags(); buildTagPanel(); onSearchChanged();
+  document.getElementById('detailTagInput').value='';
+  echo('标签已添加');
+}
+function detailDelTag(){
+  const sel=[...document.querySelectorAll('#detailTagList input:checked')].map(i=>i.value);
+  if(!sel.length){echo('请先勾选要删除的标签'); return;}
+  const meta=state.files.get(state.currentDetailPath);
+  if(!meta) return;
+  meta.tags=meta.tags.filter(t=>!sel.includes(t));
+  state.jsonData.fileTags[meta.name]=[...meta.tags];
+  flushAllJSON(); renderDetailTags(); buildTagPanel(); onSearchChanged();
+  echo('标签已删除');
+}
+function saveStartPoint(){
+  const meta=state.files.get(state.currentDetailPath);
+  if(!meta) return;
+  const time=timeToSeconds(document.getElementById('startTime').value);
+  const on=document.getElementById('startOn').checked;
+  meta.startPoint={time,on};
+  state.jsonData.startPoints[meta.name]={time,on};
+  flushAllJSON();
+  echo('起播点已保存');
+}
+function timeToSeconds(str){
+  const [h,m,s]=str.split(':').map(Number);
+  return h*3600+m*60+s;
+}
+function secondsToTime(sec){
+  const h=Math.floor(sec/3600),m=Math.floor(sec/60)%60,s=Math.floor(sec%60);
+  return [h,m,s].map(x=>x.toString().padStart(2,'0')).join(':');
+}
+
+/* ========================= 常用方案 ========================= */
+/* 2-1 保存当前方案 */
+function saveScheme(){
+  const name=prompt('请输入方案名称：');
+  if(!name) return;
+  const selTags=[...document.querySelectorAll('#allTags input:checked')].map(i=>i.value);
+  const weights=Object.fromEntries([...state.tagWeights.entries()].filter(([,w])=>w!==5));
+  state.jsonData.schemes[name]={tags:selTags,weights};
+  flushAllJSON(); buildTagPanel(); updateSchemeList();
+  echo(`方案【${name}】已保存`);
+}
+/* 2-2 加载方案（通过checkbox触发，支持多选并集） */
+function applySchemes(){
+  const checked=[...document.querySelectorAll('#schemeArea input:checked')].map(i=>i.value);
+  if(!checked.length){
+    /* 没有勾选任何方案：清空所有标签选择 */
+    document.querySelectorAll('#allTags input').forEach(i=>i.checked=false);
+    state.tagWeights.clear();
+    buildTagPanel(); onSearchChanged();
+    echo('已取消所有方案');
+    return;
+  }
+  /* 合并所有勾选方案的标签和权重 */
+  const mergedTags=new Set();
+  const mergedWeights=new Map();
+  checked.forEach(name=>{
+    const sc=state.jsonData.schemes[name];
+    if(!sc) return;
+    (sc.tags||[]).forEach(t=>mergedTags.add(t));
+    if(sc.weights){
+      for(const [t,w] of Object.entries(sc.weights)){
+        mergedWeights.set(t,w);
+      }
+    }
+  });
+  /* 清空旧状态 */
+  state.tagWeights.clear();
+  document.querySelectorAll('#allTags input').forEach(i=>i.checked=false);
+  /* 应用合并后的状态 */
+  mergedWeights.forEach((w,t)=>state.tagWeights.set(t,w));
+  mergedTags.forEach(t=>{
+    const i=document.querySelector(`#allTags input[value="${t}"]`);
+    if(i) i.checked=true;
+  });
+  buildTagPanel(); onSearchChanged();
+  echo(`已应用 ${checked.length} 个方案`);
+}
+/* 2-3 删除方案 */
+function deleteScheme(){
+  const checked=[...document.querySelectorAll('#schemeArea input:checked')].map(i=>i.value);
+  if(!checked.length){echo('请先勾选要删除的方案');return;}
+  if(!confirm(`确定删除以下 ${checked.length} 个方案？
+${checked.join('、')}`)) return;
+  checked.forEach(name=>delete state.jsonData.schemes[name]);
+  flushAllJSON(); updateSchemeList();
+  echo(`已删除 ${checked.length} 个方案`);
+}
+/* 2-4 更新方案列表 */
+function updateSchemeList(){
+  const box=document.getElementById('schemeArea');
+  box.innerHTML=Object.keys(state.jsonData.schemes).sort().map(n=>`<label><input type="checkbox" value="${n}"> ${n}</label>`).join('');
+}
+/* 2-5 方案checkbox事件委托 */
+document.getElementById('schemeArea').addEventListener('change',(e)=>{
+  if(e.target.matches('input[type="checkbox"]')) applySchemes();
+});
+
+/* ========================= 所有标签 ========================= */
+function batchAddTag(){
+  const name=prompt('请输入要批量添加的标签（空格分隔）：');
+  if(!name) return;
+  const tags=name.split(' ').filter(Boolean);
+  if(state.selectedFiles.size===0){
+    tags.forEach(t=>state.allTagsPool.add(t));
+    buildTagPanel(); onSearchChanged(); echo('标签已创建');
+    return;
+  }
+  state.selectedFiles.forEach(path=>{
+    const meta=state.files.get(path);
+    if(!meta) return;
+    tags.forEach(t=>{
+      if(!meta.tags.includes(t)) meta.tags.push(t);
+    });
+    state.jsonData.fileTags[meta.name]=[...meta.tags];
+  });
+  flushAllJSON(); buildTagPanel(); onSearchChanged();
+  echo(`已为 ${state.selectedFiles.size} 个文件添加标签`);
+}
+function batchDelTag(){
+  /* ========== 完全对齐 Python 逻辑 ========== */
+  const sel=[...document.querySelectorAll('#allTags input:checked')].map(i=>i.value);
+  if(!sel.length){echo('请先在左侧勾选要删除的标签'); return;}
+
+  /* 统计哪些文件真正用了这些标签 */
+  const usedFiles={};
+  sel.forEach(t=>usedFiles[t]=[]);
+  for(const [path,meta] of state.files){
+    sel.forEach(t=>{
+      if(meta.tags.includes(t)) usedFiles[t].push(path);
+    });
+  }
+  /* 先把“未被任何文件使用”的标签从标签池删掉 */
+  let unusedMsg=[];
+  sel.forEach(t=>{
+    if(!usedFiles[t].length){
+      state.allTagsPool.delete(t);
+      unusedMsg.push(t);
+    }
+  });
+  if(unusedMsg.length) echo(`标签【${unusedMsg.join('、')}】未被使用，已从标签池删除`);
+
+  /* 再真正从文件里移除标签 */
+  let cnt=0;
+  sel.forEach(t=>{
+    if(!usedFiles[t].length) return;
+    usedFiles[t].forEach(path=>{
+      const meta=state.files.get(path);
+      if(!meta) return;
+      meta.tags=meta.tags.filter(tag=>tag!==t);
+      state.jsonData.fileTags[meta.name]=[...meta.tags];
+      cnt++;
+    });
+  });
+  flushAllJSON(); buildTagPanel(); onSearchChanged();
+  echo(`已移除标签【${sel.join('、')}】（共更新 ${cnt} 个文件）`);
+}
+
+/* ========================= 权重长按 ========================= */
+document.getElementById('allTags').addEventListener('contextmenu',e=>{
+  e.preventDefault();
+  const label=e.target.closest('label');
+  if(!label) return;
+  const tag=label.querySelector('input').value;
+  showWeightPop(tag,e.clientX,e.clientY);
+});
+document.getElementById('allTags').addEventListener('touchstart',e=>{
+  const label=e.target.closest('label');
+  if(!label) return;
+  const tag=label.querySelector('input').value;
+  clearTimeout(label._long);
+  label._long=setTimeout(()=>{
+    e.preventDefault();
+    const rect=label.getBoundingClientRect();
+    showWeightPop(tag,rect.right+5,rect.top);
+  },600);
+});
+document.getElementById('allTags').addEventListener('touchend',e=>{
+  const label=e.target.closest('label');
+  if(label) clearTimeout(label._long);
+});
+
+/* ========================= 搜索 ========================= */
+function onSearchChanged(){
+  renderGrid();
+}
+document.getElementById('search').addEventListener('input',()=>{
+  updateTips();
+  onSearchChanged();
+});
+
+/* ========================= 标签面板 ========================= */
+let allTagsPool=new Set();
+function buildTagPanel(){
+  /* 保存当前选中状态 */
+  const selAll=[...document.querySelectorAll('#allTags input:checked')].map(i=>i.value);
+  const selExt=[...document.querySelectorAll('#extTags input:checked')].map(i=>i.value);
+
+  const cnt={}; state.files.forEach(m=>m.tags.forEach(t=>cnt[t]=(cnt[t]||0)+1));
+  allTagsPool=new Set(Object.keys(cnt));
+  document.getElementById('allTags').innerHTML=[...allTagsPool].sort().map(t=>{
+    const w=state.tagWeights.get(t)||5;
+    const color=w!==5?'color:red':'';
+    const checked=selAll.includes(t)?'checked':'';
+    return`<label style="${color}"><input type="checkbox" value="${t}" ${checked}> ${t} (${cnt[t]||0}) ${w!==5?w:''}</label>`;
+  }).join('');
+  updateSchemeList();
+  const extCnt={}; state.files.forEach(m=>extCnt[m.ext]=(extCnt[m.ext]||0)+1);
+  document.getElementById('extTags').innerHTML=Object.keys(extCnt).sort().map(e=>{
+    const checked=selExt.includes(e)?'checked':'';
+    return`<label><input type="checkbox" value="${e}" ${checked}> .${e} (${extCnt[e]})</label>`;
+  }).join('');
+}
+
+/* 事件委托：标签复选框变化时自动刷新主界面 */
+document.getElementById('allTags').addEventListener('change',(e)=>{
+  if(e.target.matches('input[type="checkbox"]')) onSearchChanged();
+});
+document.getElementById('extTags').addEventListener('change',(e)=>{
+  if(e.target.matches('input[type="checkbox"]')) onSearchChanged();
+});
+['modeFilter','modeSort','sec1','sec2','sec3'].forEach(id=>{
+  document.getElementById(id).onchange=()=>{
+    state.filterMode=document.getElementById('modeFilter').checked;
+    state.sortMode=document.getElementById('modeSort').checked;
+    state.showSec=[+document.getElementById('sec1').checked,+document.getElementById('sec2').checked,+document.getElementById('sec3').checked];
+    onSearchChanged();
+  };
+});
+
+/* ========================= 工具函数 ========================= */
+function formatTime(sec){
+  if(isNaN(sec))return'00:00';
+  const m=Math.floor(sec/60),s=Math.floor(sec%60);
+  return`${m.toString().padStart(2,'0')}:${s.toString().padStart(2,'0')}`;
+}
+
+/* ========================= 自适应格子大小 ========================= */
+function calcOptimalCardSize(){
+  const vw=window.innerWidth, vh=window.innerHeight;
+  const grid=document.getElementById('cardGrid');
+  const gridPad=parseInt(getComputedStyle(grid).padding)||6;
+  const availableW=vw-gridPad*2;
+  const availableH=vh-document.getElementById('opBar').getBoundingClientRect().height-20;
+
+  /* 目标：每行至少放2个，最多放6个；优先填满宽度 */
+  const minCardW=120, maxCardW=240;
+  const baseGap=4;  /* 基础间距 */
+
+  let bestN=Math.max(2, Math.min(6, Math.floor(availableW/(minCardW+baseGap))));
+  let bestGap=baseGap;
+  let bestCardW=Math.floor((availableW+baseGap)/bestN)-baseGap;
+
+  /* 如果算出来太大，增加每行数量 */
+  while(bestCardW>maxCardW && bestN<6){
+    bestN++;
+    bestCardW=Math.floor((availableW+baseGap)/bestN)-baseGap;
+  }
+  /* 如果算出来太小，减少每行数量 */
+  while(bestCardW<minCardW && bestN>2){
+    bestN--;
+    bestCardW=Math.floor((availableW+baseGap)/bestN)-baseGap;
+  }
+  /* 最终clamp */
+  bestCardW=Math.max(minCardW, Math.min(maxCardW, bestCardW));
+
+  /* 同时根据可用高度调整卡片高度（图片区域） */
+  const targetRows=Math.max(2, Math.floor(availableH/180));
+  const cardImgH=Math.max(80, Math.min(160, Math.floor((availableH-targetRows*50)/targetRows)));
+
+  /* 应用 */
+  document.documentElement.style.setProperty('--cardW', bestCardW+'px');
+  document.documentElement.style.setProperty('--gap', bestGap+'px');
+  document.documentElement.style.setProperty('--cardImgH', cardImgH+'px');
+
+  /* 动态调整图片高度 */
+  const style=document.getElementById('dynCardStyle')||document.createElement('style');
+  style.id='dynCardStyle';
+  style.textContent=`.card img{height:${cardImgH}px !important;}`;
+  document.head.appendChild(style);
+
+  return {cardW:bestCardW, gap:bestGap, imgH:cardImgH};
+}
+
+/* ========================= 初始化 ========================= */
+calcOptimalCardSize();
+window.addEventListener('resize', ()=>{ calcOptimalCardSize(); renderGrid(); });
+buildTagPanel(); renderFileList(); onSearchChanged();
+</script>
+</body>
+</html>
